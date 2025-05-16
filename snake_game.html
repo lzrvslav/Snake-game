@@ -1,0 +1,294 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake Game</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            font-family: Arial, sans-serif;
+            color: white;
+        }
+        canvas {
+            border: 2px solid #ffffff;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+            background-color: #000;
+        }
+        #gameOverScreen {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+        }
+        #scoreDisplay {
+            font-size: 24px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px #00ff00;
+        }
+        #restartButton {
+            padding: 10px 20px;
+            font-size: 18px;
+            background-color: #00ff00;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #restartButton:hover {
+            background-color: #00cc00;
+        }
+    </style>
+</head>
+<body>
+    <div id="scoreDisplay">Score: 0</div>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    <div id="gameOverScreen">
+        <h1>Game Over</h1>
+        <p id="finalScore">Score: 0</p>
+        <button id="restartButton">Restart</button>
+    </div>
+
+    <script>
+        // Get canvas and context
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const finalScore = document.getElementById('finalScore');
+        const restartButton = document.getElementById('restartButton');
+
+        // Game settings
+        const gridSize = 20;
+        const tileCount = canvas.width / gridSize;
+        let snake = [{ x: 10, y: 10 }];
+        let food = { x: 15, y: 15 };
+        let dx = 0;
+        let dy = 0;
+        let score = 0;
+        let speed = 100; // Initial speed in milliseconds
+        let gameActive = false;
+        let lastUpdate = 0;
+        let lastSpeedIncrease = 0;
+        let animationFrame;
+        let isFirstFrame = true;
+
+        // Initialize game
+        function initGame() {
+            console.log('Initializing game at', new Date().toISOString());
+            // Reset game state
+            snake = [{ x: 10, y: 10 }];
+            food = { x: 15, y: 15 };
+            dx = 0;
+            dy = 0;
+            score = 0;
+            speed = 100;
+            lastUpdate = performance.now();
+            lastSpeedIncrease = performance.now();
+            isFirstFrame = true;
+            scoreDisplay.textContent = `Score: ${score}`;
+            gameOverScreen.style.display = 'none';
+            gameActive = true;
+            // Cancel any existing animation frame
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+            // Clear canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // Draw initial state
+            draw();
+            // Start game loop
+            animationFrame = requestAnimationFrame(gameLoop);
+        }
+
+        // Handle keyboard input
+        document.addEventListener('keydown', (e) => {
+            if (!gameActive) return;
+            switch (e.key) {
+                case 'ArrowUp':
+                    if (dy === 0) { dx = 0; dy = -1; }
+                    break;
+                case 'ArrowDown':
+                    if (dy === 0) { dx = 0; dy = 1; }
+                    break;
+                case 'ArrowLeft':
+                    if (dx === 0) { dx = -1; dy = 0; }
+                    break;
+                case 'ArrowRight':
+                    if (dx === 0) { dx = 1; dy = 0; }
+                    break;
+            }
+        });
+
+        // Main game loop
+        function gameLoop(timestamp) {
+            if (!gameActive) return;
+
+            // Control update rate
+            if (timestamp - lastUpdate >= speed) {
+                // Skip collision checks on first frame after restart
+                if (isFirstFrame) {
+                    isFirstFrame = false;
+                    draw();
+                    lastUpdate = timestamp;
+                    animationFrame = requestAnimationFrame(gameLoop);
+                    return;
+                }
+
+                // Update speed every 10 seconds
+                if (timestamp - lastSpeedIncrease > 10000) {
+                    speed = Math.max(50, speed - 10); // Minimum speed 50ms
+                    lastSpeedIncrease = timestamp;
+                }
+
+                // Update game state
+                const head = { x: snake[0].x + dx, y: snake[0].y + dy };
+
+                // Check wall collision
+                if (head.x < 0 || head.x >= tileCount || head.y < 0 || head.y >= tileCount) {
+                    gameOver();
+                    return;
+                }
+
+                // Check self collision
+                for (let i = 1; i < snake.length; i++) { // Start from 1 to avoid head-on-head check
+                    if (head.x === snake[i].x && head.y === snake[i].y) {
+                        gameOver();
+                        return;
+                    }
+                }
+
+                // Add new head
+                snake.unshift(head);
+
+                // Check food collision
+                if (head.x === food.x && head.y === food.y) {
+                    score += 10;
+                    scoreDisplay.textContent = `Score: ${score}`;
+                    spawnFood();
+                } else {
+                    snake.pop(); // Remove tail if no food eaten
+                }
+
+                // Draw game
+                draw();
+
+                lastUpdate = timestamp;
+            }
+
+            // Schedule next frame
+            animationFrame = requestAnimationFrame(gameLoop);
+        }
+
+        // Draw game elements
+        function draw() {
+            // Clear canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw snake with glow effect
+            ctx.fillStyle = '#00ff00';
+            ctx.shadowColor = '#00ff00';
+            ctx.shadowBlur = 10;
+            snake.forEach(segment => {
+                ctx.fillRect(segment.x * gridSize, segment.y * gridSize, gridSize - 2, gridSize - 2);
+            });
+            ctx.shadowBlur = 0;
+
+            // Draw food
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(food.x * gridSize + gridSize / 2, food.y * gridSize + gridSize / 2, gridSize / 2 - 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Spawn food at random position
+        function spawnFood() {
+            food.x = Math.floor(Math.random() * tileCount);
+            food.y = Math.floor(Math.random() * tileCount);
+            // Ensure food doesn't spawn on snake
+            for (let i = 0; i < snake.length; i++) {
+                if (food.x === snake[i].x && food.y === snake[i].y) {
+                    spawnFood();
+                    return;
+                }
+            }
+        }
+
+        // Handle game over
+        function gameOver() {
+            console.log('Game over triggered at', new Date().toISOString());
+            gameActive = false;
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+            finalScore.textContent = `Score: ${score}`;
+            gameOverScreen.style.display = 'block';
+            // Ensure restart button listener is active
+            restartButton.removeEventListener('click', handleRestart);
+            restartButton.addEventListener('click', handleRestart);
+        }
+
+        // Restart handler
+        function handleRestart() {
+            console.log('Restart button clicked at', new Date().toISOString());
+            initGame();
+        }
+
+        // Initial restart button listener
+        restartButton.addEventListener('click', handleRestart);
+
+        // Start game
+        initGame();
+    </script>
+</body>
+</html>
