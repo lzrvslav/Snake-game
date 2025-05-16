@@ -86,6 +86,13 @@
         #restartButton:hover {
             background-color: #00cc00;
         }
+        #pauseMessage {
+            position: absolute;
+            top: 20px;
+            font-size: 20px;
+            text-shadow: 0 0 10px #ffffff;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -94,8 +101,10 @@
     <div id="gameOverScreen">
         <h1>Game Over</h1>
         <p id="finalScore">Score: 0</p>
+        <p id="highScore">High Score: 0</p>
         <button id="restartButton">Restart</button>
     </div>
+    <div id="pauseMessage">Paused - Press Space to Resume</div>
 
     <script>
         // Get canvas and context
@@ -104,29 +113,43 @@
         const scoreDisplay = document.getElementById('scoreDisplay');
         const gameOverScreen = document.getElementById('gameOverScreen');
         const finalScore = document.getElementById('finalScore');
+        const highScoreDisplay = document.getElementById('highScore');
         const restartButton = document.getElementById('restartButton');
+        const pauseMessage = document.getElementById('pauseMessage');
+
+        // Audio elements (base64-encoded placeholders)
+        const eatSound = new Audio('data:audio/wav;base64,//MIIB9gADAgEAA...');
+        const powerUpSound = new Audio('data:audio/wav;base64,//MIIB9gADAgEAA...');
+        const gameOverSound = new Audio('data:audio/wav;base64,//MIIB9gADAgEAA...');
 
         // Game settings
         const gridSize = 20;
         const tileCount = canvas.width / gridSize;
         let snake = [{ x: 10, y: 10 }];
         let food = { x: 15, y: 15 };
+        let powerUp = null;
         let dx = 0;
         let dy = 0;
         let score = 0;
+        let highScore = localStorage.getItem('snakeHighScore') || 0;
         let speed = 100; // Initial speed in milliseconds
         let gameActive = false;
+        let isPaused = false;
         let lastUpdate = 0;
         let lastSpeedIncrease = 0;
-        let animationFrame;
         let isFirstFrame = true;
+        let scoreMultiplier = 1;
+        let multiplierEndTime = 0;
+        let colorIndex = 0;
+        const snakeColors = ['#00ff00', '#00b7eb', '#ff00ff'];
+        let animationFrame;
 
         // Initialize game
         function initGame() {
             console.log('Initializing game at', new Date().toISOString());
-            // Reset game state
             snake = [{ x: 10, y: 10 }];
             food = { x: 15, y: 15 };
+            powerUp = null;
             dx = 0;
             dy = 0;
             score = 0;
@@ -134,25 +157,40 @@
             lastUpdate = performance.now();
             lastSpeedIncrease = performance.now();
             isFirstFrame = true;
+            scoreMultiplier = 1;
+            multiplierEndTime = 0;
+            colorIndex = 0;
             scoreDisplay.textContent = `Score: ${score}`;
+            highScoreDisplay.textContent = `High Score: ${highScore}`;
             gameOverScreen.style.display = 'none';
+            pauseMessage.style.display = 'none';
             gameActive = true;
-            // Cancel any existing animation frame
+            isPaused = false;
             if (animationFrame) {
                 cancelAnimationFrame(animationFrame);
             }
-            // Clear canvas
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            // Draw initial state
             draw();
-            // Start game loop
             animationFrame = requestAnimationFrame(gameLoop);
         }
 
         // Handle keyboard input
         document.addEventListener('keydown', (e) => {
-            if (!gameActive) return;
+            if (e.key === ' ') {
+                if (gameActive && !isFirstFrame) {
+                    isPaused = !isPaused;
+                    console.log(isPaused ? 'Game paused at' : 'Game resumed at', new Date().toISOString());
+                    pauseMessage.style.display = isPaused ? 'block' : 'none';
+                    if (!isPaused) {
+                        // Resume game loop
+                        lastUpdate = performance.now(); // Reset timing to avoid jump
+                        animationFrame = requestAnimationFrame(gameLoop);
+                    }
+                }
+                return;
+            }
+            if (!gameActive || isPaused) return;
             switch (e.key) {
                 case 'ArrowUp':
                     if (dy === 0) { dx = 0; dy = -1; }
@@ -171,11 +209,9 @@
 
         // Main game loop
         function gameLoop(timestamp) {
-            if (!gameActive) return;
+            if (!gameActive || isPaused) return;
 
-            // Control update rate
             if (timestamp - lastUpdate >= speed) {
-                // Skip collision checks on first frame after restart
                 if (isFirstFrame) {
                     isFirstFrame = false;
                     draw();
@@ -186,9 +222,18 @@
 
                 // Update speed every 10 seconds
                 if (timestamp - lastSpeedIncrease > 10000) {
-                    speed = Math.max(50, speed - 10); // Minimum speed 50ms
+                    speed = Math.max(50, speed - 10);
                     lastSpeedIncrease = timestamp;
                 }
+
+                // Update score multiplier
+                if (multiplierEndTime && timestamp > multiplierEndTime) {
+                    scoreMultiplier = 1;
+                    multiplierEndTime = 0;
+                }
+
+                // Update snake color
+                colorIndex = (colorIndex + 0.1) % snakeColors.length;
 
                 // Update game state
                 const head = { x: snake[0].x + dx, y: snake[0].y + dy };
@@ -200,7 +245,7 @@
                 }
 
                 // Check self collision
-                for (let i = 1; i < snake.length; i++) { // Start from 1 to avoid head-on-head check
+                for (let i = 1; i < snake.length; i++) {
                     if (head.x === snake[i].x && head.y === snake[i].y) {
                         gameOver();
                         return;
@@ -212,11 +257,22 @@
 
                 // Check food collision
                 if (head.x === food.x && head.y === food.y) {
-                    score += 10;
+                    score += 10 * scoreMultiplier;
                     scoreDisplay.textContent = `Score: ${score}`;
+                    eatSound.play().catch(() => {});
                     spawnFood();
+                    if (Math.random() < 0.3) spawnPowerUp();
+                } else if (powerUp && head.x === powerUp.x && head.y === powerUp.y) {
+                    powerUpSound.play().catch(() => {});
+                    if (powerUp.type === 'multiplier') {
+                        scoreMultiplier = 2;
+                        multiplierEndTime = timestamp + 5000;
+                    } else if (powerUp.type === 'shrink' && snake.length > 1) {
+                        snake = snake.slice(0, Math.max(1, snake.length - 2));
+                    }
+                    powerUp = null;
                 } else {
-                    snake.pop(); // Remove tail if no food eaten
+                    snake.pop();
                 }
 
                 // Draw game
@@ -225,19 +281,17 @@
                 lastUpdate = timestamp;
             }
 
-            // Schedule next frame
             animationFrame = requestAnimationFrame(gameLoop);
         }
 
         // Draw game elements
         function draw() {
-            // Clear canvas
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Draw snake with glow effect
-            ctx.fillStyle = '#00ff00';
-            ctx.shadowColor = '#00ff00';
+            // Draw snake with color-changing effect
+            ctx.fillStyle = snakeColors[Math.floor(colorIndex)];
+            ctx.shadowColor = snakeColors[Math.floor(colorIndex)];
             ctx.shadowBlur = 10;
             snake.forEach(segment => {
                 ctx.fillRect(segment.x * gridSize, segment.y * gridSize, gridSize - 2, gridSize - 2);
@@ -249,16 +303,39 @@
             ctx.beginPath();
             ctx.arc(food.x * gridSize + gridSize / 2, food.y * gridSize + gridSize / 2, gridSize / 2 - 2, 0, Math.PI * 2);
             ctx.fill();
+
+            // Draw power-up
+            if (powerUp) {
+                ctx.fillStyle = powerUp.type === 'multiplier' ? '#ffd700' : '#00ffff';
+                ctx.beginPath();
+                ctx.arc(powerUp.x * gridSize + gridSize / 2, powerUp.y * gridSize + gridSize / 2, gridSize / 2 - 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
 
         // Spawn food at random position
         function spawnFood() {
             food.x = Math.floor(Math.random() * tileCount);
             food.y = Math.floor(Math.random() * tileCount);
-            // Ensure food doesn't spawn on snake
             for (let i = 0; i < snake.length; i++) {
                 if (food.x === snake[i].x && food.y === snake[i].y) {
                     spawnFood();
+                    return;
+                }
+            }
+        }
+
+        // Spawn power-up
+        function spawnPowerUp() {
+            const types = ['multiplier', 'shrink'];
+            powerUp = {
+                x: Math.floor(Math.random() * tileCount),
+                y: Math.floor(Math.random() * tileCount),
+                type: types[Math.floor(Math.random() * types.length)]
+            };
+            for (let i = 0; i < snake.length; i++) {
+                if (powerUp.x === snake[i].x && powerUp.y === snake[i].y || (powerUp.x === food.x && powerUp.y === food.y)) {
+                    spawnPowerUp();
                     return;
                 }
             }
@@ -271,9 +348,14 @@
             if (animationFrame) {
                 cancelAnimationFrame(animationFrame);
             }
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('snakeHighScore', highScore);
+            }
             finalScore.textContent = `Score: ${score}`;
+            highScoreDisplay.textContent = `High Score: ${highScore}`;
             gameOverScreen.style.display = 'block';
-            // Ensure restart button listener is active
+            gameOverSound.play().catch(() => {});
             restartButton.removeEventListener('click', handleRestart);
             restartButton.addEventListener('click', handleRestart);
         }
